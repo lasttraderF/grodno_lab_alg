@@ -7,3 +7,28 @@
 @media print{.note,.sidefoot,.toolbar{display:none!important}}
 
 .doc .row>svg{width:42px;height:42px;flex:none}.doc .row>div{max-width:75%}
+
+/* Semantic status surfaces: the whole row, its badge and sticky cell share a token. */
+[data-status="draft"]{--status-bg:#f0f2f4;--status-edge:#7a8792}
+[data-status="intake"]{--status-bg:#e5edff;--status-edge:#5075bf}
+[data-status="registered"]{--status-bg:#ddf4ef;--status-edge:#318473}
+[data-status="work"]{--status-bg:#fff3c4;--status-edge:#a58018}
+[data-status="ready"]{--status-bg:#e4f5df;--status-edge:#5c9250}
+[data-status="cancelled"]{--status-bg:#f8e1e8;--status-edge:#ae5e79}
+[data-status="hold"]{--status-bg:#ffe7cd;--status-edge:#b87529}
+[data-status="expected"]{--status-bg:#faf5eb;--status-edge:#a99771}
+[data-status="accepted"]{--status-bg:#effafa;--status-edge:#719b9b}
+[data-status="rejected"]{--status-bg:#ffdcd7;--status-edge:#bf6557}
+[data-status="transfer"]{--status-bg:#dff3fa;--status-edge:#4f97b1}
+[data-status="stored"]{--status-bg:#e5f0e8;--status-edge:#6f9079}
+[data-status="returned"]{--status-bg:#ece6dc;--status-edge:#9a8561}
+[data-status="disposed"]{--status-bg:#e8e4e1;--status-edge:#8c817a}
+[data-status="approved"]{--status-bg:#d5f1ed;--status-edge:#398a7d}
+[data-status="issued"]{--status-bg:#d4edce;--status-edge:#5f8f50}
+tbody .status-row{background:var(--status-bg)}
+tbody .status-row>td{background:var(--status-bg)}
+tbody .status-row>td:first-child{box-shadow:inset 3px 0 var(--status-edge)}
+tbody .status-row:hover>td,tbody .status-row:focus-within>td{background:color-mix(in srgb,var(--status-bg),var(--status-edge) 7%)}
+.status-tag{background:var(--status-bg);color:var(--ink);border:1px solid var(--status-edge)}
+.result-table .status-row>td:first-child{background:var(--status-bg)}
+.result-table .status-row:hover>td:first-child,.result-table .status-row:focus-within>td:first-child{background:color-mix(in srgb,var(--status-bg),var(--status-edge) 7%)}
