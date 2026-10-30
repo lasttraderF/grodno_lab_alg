@@ -15,3 +15,36 @@ const g=m.find('genetic');const doc=m.prepare(g),before=doc.snapshot.samples[0].
 // A failed invalid BY registration cannot consume sequence or application numbers.
 const bad=m.request('bad','genetic','Учебный заказчик',1);bad.samples[0].state='accepted';bad.samples[0].label='BY123';m.db.requests.push(bad);const seq=m.db.seq.gen;m.db.role='lab';assert.throws(()=>m.register(bad),/12 цифр/);assert.equal(m.db.seq.gen,seq);assert.equal(bad.number,'');
 console.log('Domain scenarios passed: role scope, partial intake, numbering, payment gate, result completeness, consent, immutable document snapshot, recollection, invalid identity.');
+
+// One physical sample carries PCR, IFA and quantitative assignments through receipt and issuance.
+m.db.role='manager';
+const multi=m.request('mixed-inf','pcr','Учебный заказчик нескольких испытаний',1,'draft');
+multi.samples[0].label='MIX-01';multi.samples[0].material='кровь';multi.commonTests=[m.types.pcr.code];
+m.setDraftTypes(multi,['pcr','ifa','mastitis']);
+assert.equal(multi.samples[0].material,'кровь');
+assert.deepEqual(Array.from(m.requestTypes(multi)),['pcr','ifa','mastitis']);
+assert.throws(()=>m.setDraftTypes(multi,[]),/хотя бы/);
+assert.throws(()=>m.setDraftTypes(multi,['pcr','genetic']),/одного раздела/);
+multi.vaccineState='';assert.throws(()=>m.saveDraft(multi,true),/вакцинации/);
+multi.vaccineState='unknown';multi.contactSameAsCollector=true;multi.collector='Учебный ветеринар';multi.contact='Прежний контакт';
+multi.symptoms=['Диарея'];multi.hasOtherSymptoms=true;multi.otherSymptoms='Учебное дополнительное наблюдение';
+const mixed=m.saveDraft(multi,true);assert.equal(mixed.contact,mixed.collector);assert.equal(mixed.otherSymptoms,multi.otherSymptoms);
+m.db.role='lab';mixed.samples[0].state='accepted';m.register(mixed);const mixedNumber=mixed.samples[0].number;m.transmit(mixed);
+m.db.role='analyst';m.receive(mixed);
+for(const k of m.targets(m.db,mixed,mixed.samples[0]))if(m.testType(m.db,mixed,k.split('::')[0])!=='mastitis')mixed.samples[0].results[k]='−';
+assert.throws(()=>m.finish(mixed),/Заполните/);
+for(const k of m.targetsForType(mixed,mixed.samples[0],'mastitis'))mixed.samples[0].results[k]='~ 1,2×10^3';
+assert.throws(()=>m.finish(mixed),/ВКО/);mixed.samples[0].control='valid';m.finish(mixed);
+assert.equal(mixed.samples[0].number,mixedNumber);assert.equal(mixed.samples[0].physical,1);
+m.db.role='lab';const mixedDoc=m.prepare(mixed);assert.ok(mixedDoc.number.endsWith('-ПЦР-ИФА'));assert.equal(mixedDoc.snapshot.samples[0].tests.length,3);
+
+// SNP and origin keep their own completion rules alongside genotypes in one genetic request.
+m.db.role='manager';const combo=m.request('mixed-gen','genetic','Учебная генетическая заявка',1,'draft');
+m.setDraftTypes(combo,['genetic','snp','origin']);const gs=m.saveDraft(combo,true);
+m.db.role='lab';gs.samples[0].state='accepted';m.register(gs);m.transmit(gs);m.db.role='analyst';m.receive(gs);
+const gsample=gs.samples[0];for(const k of m.targetsForType(gs,gsample,'genetic'))gsample.results[k]='F';
+assert.throws(()=>m.finish(gs),/SNP/);Object.assign(gsample.extraData,{chip:'Учебный чип',snp:'50000',validity:'.99'});
+assert.throws(()=>m.finish(gs),/маркеры/);for(const marker of m.markers)gsample.results[marker]='100/104';
+Object.assign(gsample.extraData,{motherDecision:'подтверждается',fatherDecision:'не определено'});m.finish(gs);
+assert.equal(m.baseStatus(gs),'ready');
+console.log('Mixed-assay scenarios passed: one sample/number, IFA information, quantitative control, contact inheritance, free-text symptoms, SNP and origin completeness.');
