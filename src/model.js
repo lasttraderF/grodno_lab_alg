@@ -34,16 +34,25 @@ function testType(data,r,code){const method=data.catalog[code]?.method;return ty
 function sampleTypes(r,s){return [...new Set(s.tests.map(code=>testType(db,r,code)))]}
 function requestTypes(r){const selected=[...new Set(r.samples.flatMap(s=>sampleTypes(r,s)))];return selected.length?selected:r.selectedTypes?.length?r.selectedTypes:[r.type]}
 function targetsForType(r,s,type){return targets(db,r,s).filter(k=>testType(db,r,k.split('::')[0])===type)}
+const registrationGroup=type=>type==='product'?'product':types[type].dir;
+function numberSamples(d){let next=Math.max(d.nextOrdinal||0,...d.samples.map(s=>Number(s.ordinal)||0));for(const s of d.samples){if(!s.ordinal)s.ordinal=++next;if(d.autoNumbered){if(!s.animalId&&s.label?.startsWith('BY'))s.animalId=s.label;s.label=String(s.ordinal);s.autoLabel=true}}d.nextOrdinal=next}
+function newDraftSample(d,extra={}){numberSamples(d);const ordinal=(d.nextOrdinal||0)+1;d.nextOrdinal=ordinal;return sample(ordinal,d.type,{label:d.autoNumbered?String(ordinal):'',ordinal,autoLabel:!!d.autoNumbered,animalId:'',material:d.commonMaterial,species:d.commonSpecies,tests:[...d.commonTests],...extra})}
 function setDraftTypes(d,list){
  const keys=[...new Set(list)];if(!keys.length)throw Error('Выберите хотя бы один вид испытаний');
  if(keys.some(k=>!types[k]))throw Error('Неизвестный вид испытаний');
- if(keys.some(k=>types[k].dir!==types[keys[0]].dir)||keys.includes('product')&&keys.length>1)throw Error('Выберите испытания одного раздела');
- const oldType=d.type,newType=keys[0],changedGroup=types[oldType].dir!==types[newType].dir||(oldType==='product')!==(newType==='product');
- const update=codes=>{const next=codes.filter(code=>keys.includes(testType(db,d,code)));for(const type of keys)if(!next.some(code=>testType(db,d,code)===type))next.push(types[type].code);return [...new Set(next)]};
- d.commonTests=update(d.commonTests||[types[oldType].code]);
- for(const s of d.samples){s.tests=update(s.tests);if(changedGroup){if(s.material===defaultMat(oldType))s.material=defaultMat(newType);if(s.species===(oldType==='product'?'продукция / объект':'КРС'))s.species=newType==='product'?'продукция / объект':'КРС'}}
- if(changedGroup){d.commonMaterial=defaultMat(newType);d.commonSpecies=newType==='product'?'продукция / объект':'КРС'}
+ if(d.samples.length>=6000&&keys.includes('product')&&keys.some(k=>k!=='product')&&!d.samples.some(s=>s.species==='продукция / объект'))throw Error('Для продукции нужна отдельная проба; максимум 6 000 строк');
+ const oldType=d.type,nonProduct=keys.filter(k=>k!=='product'),newType=nonProduct[0]||'product';
+ const update=(codes,kinds)=>{const next=codes.filter(code=>kinds.includes(testType(db,d,code)));for(const type of kinds)if(!next.some(code=>testType(db,d,code)===type))next.push(types[type].code);return [...new Set(next)]};
+ d.commonTests=update(d.commonTests||[types[oldType].code],nonProduct.length?nonProduct:['product']);
+ for(const s of d.samples){const wasProduct=s.species==='продукция / объект',product=keys.includes('product')&&(!nonProduct.length||wasProduct),kinds=product?['product']:nonProduct;
+  s.tests=update(s.tests,kinds);if(product!==wasProduct){s.material=defaultMat(product?'product':newType);s.species=product?'продукция / объект':'КРС'}
+  else if(!wasProduct&&oldType!==newType&&s.material===defaultMat(oldType))s.material=defaultMat(newType);
+ }
+ if(registrationGroup(oldType)!==registrationGroup(newType)){d.commonMaterial=defaultMat(newType);d.commonSpecies=newType==='product'?'продукция / объект':'КРС'}
  d.selectedTypes=keys;d.type=newType;d.dir=types[newType].dir;
+ if(keys.includes('product')&&nonProduct.length&&!d.samples.some(s=>s.tests.some(code=>testType(db,d,code)==='product'))){if(d.samples.length>=6000)throw Error('Для продукции нужна отдельная проба; максимум 6 000 строк');d.samples.push(newDraftSample(d,{species:'продукция / объект',group:'',material:defaultMat('product'),tests:[types.product.code]}))}
+ if(nonProduct.length&&!d.samples.some(s=>s.species!=='продукция / объект'))d.samples.push(newDraftSample(d,{species:'КРС',material:defaultMat(newType),tests:[...d.commonTests]}));
+ numberSamples(d);
 }
 function baseStatus(r){if(r.status==='cancelled'||r.status==='draft'||r.status==='sent')return r.status;const s=r.samples.filter(x=>x.state==='accepted');if(s.length&&s.every(x=>x.work==='done'))return 'ready';if(s.some(x=>x.work==='received'||x.work==='done'))return 'work';return 'registered'}
 function roleCan(r){return db.role==='manager'?r.owner===db.manager:db.role!=='viewer'}
@@ -63,7 +72,25 @@ function replace(r,s,reason){if(!['head','lab'].includes(db.role)||!s.number)thr
 function snapshot(r){const accepted=r.samples.filter(s=>s.state==='accepted'&&s.work==='done');if(!accepted.length)throw Error('Пока нет завершённых результатов');return {...clone(r),samples:clone(accepted),docs:[],audit:[],phone:'',contact:''};}
 function prepare(r){if(!['head','lab'].includes(db.role))throw Error('Подготовка доступна приёмке');const snap=snapshot(r);const doc={id:uid('d'),number:r.number+(r.dir==='inf'?('-'+[...new Set(requestTypes(r).map(t=>t==='ifa'?'ИФА':'ПЦР'))].join('-')):''),version:r.docs.length+1,status:'draft',created:date(),issued:'',snapshot:snap,prepared:roles[db.role].person,tester:r.lastTester||'Исполнитель испытания',approver:roles.head.person};r.docs.push(doc);audit(r,'Подготовлен документ, версия '+doc.version);return doc;}
 function approve(r,doc){if(db.role!=='head')throw Error('Утверждение доступно руководителю');if(doc.status!=='draft')throw Error('Документ уже утверждён');doc.status='approved';doc.approved=now();doc.approvedBy=roles.head.person;audit(r,'Утверждён документ '+doc.number+' · версия '+doc.version);}
-function saveDraft(d,send){if(!['manager','lab','head'].includes(db.role))throw Error('Создание заявки недоступно');if(!d.customer.trim())throw Error('Выберите заказчика');if(!d.samples.length)throw Error('Добавьте хотя бы одну пробу');for(const s of d.samples){if(!s.label.trim()||!s.material||!s.tests.length)throw Error('Проверьте обозначение, материал и исследования каждой пробы');if(d.dir==='gen'&&d.type!=='product'&&s.label.startsWith('BY')&&!/^BY\d{12}$/.test(s.label))throw Error('Для белорусских животных нужен BY и 12 цифр');}if(send&&requestTypes(d).includes('ifa')&&!d.vaccineState)throw Error('Укажите, предоставлены ли сведения о вакцинации');let prev=find(d.id);if(prev&&prev.status!=='draft')throw Error('Отправленная заявка защищена от изменения');const r=clone(d);delete r.purpose;if(r.contactSameAsCollector)r.contact=r.collector;r.selectedTypes=requestTypes(r);r.type=r.selectedTypes[0];r.status=send?'sent':'draft';r.owner=prev?.owner||(db.role==='manager'?db.manager:'lab');if(prev)db.requests[db.requests.indexOf(prev)]=r;else db.requests.unshift(r);audit(r,send?'Заявка отправлена на приёмку':'Черновик сохранён');return r;}
+function saveDraft(d,send){
+ if(!['manager','lab','head'].includes(db.role))throw Error('Создание заявки недоступно');
+ const prev=find(d.id);if(prev&&prev.status!=='draft')throw Error('Отправленная заявка защищена от изменения');
+ const draft=clone(d);numberSamples(draft);if(draft.selectedTypes&&draft.selectedTypes.length===0)throw Error('Выберите хотя бы один вид испытаний');if(!draft.customer.trim())throw Error('Выберите заказчика');if(!draft.samples.length)throw Error('Добавьте хотя бы одну пробу');
+ for(const s of draft.samples){if(!s.material||!s.tests.length||(!draft.autoNumbered&&!s.label.trim()))throw Error(draft.autoNumbered?'Проверьте материал и исследования каждой пробы':'Проверьте обозначение, материал и исследования каждой пробы');
+  const kinds=sampleTypes(draft,s),animal=kinds.some(t=>types[t].dir==='gen'&&t!=='product');
+  if(kinds.includes('product')&&kinds.length>1)throw Error('Для испытаний продукции добавьте отдельную пробу');
+  if(animal){const label=draft.autoNumbered?s.animalId:s.label;if(!label?.trim())throw Error('Укажите индивидуальный номер животного для генетических испытаний');if(label.startsWith('BY')&&!/^BY\d{12}$/.test(label))throw Error('Для белорусских животных нужен BY и 12 цифр');if(s.sourceKind==='pool')throw Error('Для генетики нужна отдельная проба каждого животного')}
+ }
+ if(send&&requestTypes(draft).includes('ifa')&&!draft.vaccineState)throw Error('Укажите, предоставлены ли сведения о вакцинации');
+ delete draft.purpose;if(draft.contactSameAsCollector)draft.contact=draft.collector;
+ const groups=[...new Set(requestTypes(draft).map(registrationGroup))],parts=send?groups:[null],ids=parts.map((_,i)=>i===0?draft.id:uid('r'));
+ const saved=parts.map((group,i)=>{const r=clone(draft);r.id=ids[i];r.samples=draft.samples.map(s=>({...clone(s),tests:s.tests.filter(code=>group===null||registrationGroup(testType(db,draft,code))===group)})).filter(s=>s.tests.length);
+  r.selectedTypes=requestTypes({...r,selectedTypes:[]});r.type=group===null?(r.selectedTypes.find(t=>t!=='product')||'product'):r.selectedTypes[0];r.dir=types[r.type].dir;
+  if(send&&draft.autoNumbered)for(const s of r.samples){s.sourceSampleId=s.id;if(group==='gen')s.label=s.animalId;else if(group==='product')s.label=s.objectName?.trim()||s.material;else s.label=String(s.ordinal)}
+  r.status=send?'sent':'draft';r.owner=prev?.owner||(db.role==='manager'?db.manager:'lab');if(ids.length>1){r.familyId=draft.id;r.relatedRequestIds=ids.filter(id=>id!==r.id)}else{delete r.familyId;delete r.relatedRequestIds}return r});
+ if(prev)db.requests.splice(db.requests.indexOf(prev),1,...saved);else db.requests.unshift(...saved);
+ for(const r of saved)audit(r,send?'Заявка отправлена на приёмку':'Черновик сохранён');return saved[0];
+}
 function reset(){db=initial();save()}
-window.LabModel={get db(){return db},roles,types,materials,animals,regions,markers,pigMarkers,uid,date,now,clone,sample,request,save,audit,find,targets,targetName,testType,sampleTypes,requestTypes,targetsForType,setDraftTypes,baseStatus,roleCan,register,transmit,receive,finish,consent,replace,prepare,approve,saveDraft,reset,KEY};save();
+window.LabModel={get db(){return db},roles,types,materials,animals,regions,markers,pigMarkers,uid,date,now,clone,sample,request,save,audit,find,targets,targetName,testType,sampleTypes,requestTypes,targetsForType,setDraftTypes,numberSamples,newDraftSample,registrationGroup,baseStatus,roleCan,register,transmit,receive,finish,consent,replace,prepare,approve,saveDraft,reset,KEY};save();
 })();

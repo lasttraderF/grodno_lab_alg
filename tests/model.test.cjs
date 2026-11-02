@@ -24,7 +24,7 @@ m.setDraftTypes(multi,['pcr','ifa','mastitis']);
 assert.equal(multi.samples[0].material,'кровь');
 assert.deepEqual(Array.from(m.requestTypes(multi)),['pcr','ifa','mastitis']);
 assert.throws(()=>m.setDraftTypes(multi,[]),/хотя бы/);
-assert.throws(()=>m.setDraftTypes(multi,['pcr','genetic']),/одного раздела/);
+
 multi.vaccineState='';assert.throws(()=>m.saveDraft(multi,true),/вакцинации/);
 multi.vaccineState='unknown';multi.contactSameAsCollector=true;multi.collector='Учебный ветеринар';multi.contact='Прежний контакт';
 multi.symptoms=['Диарея'];multi.hasOtherSymptoms=true;multi.otherSymptoms='Учебное дополнительное наблюдение';
@@ -48,3 +48,24 @@ assert.throws(()=>m.finish(gs),/маркеры/);for(const marker of m.markers)g
 Object.assign(gsample.extraData,{motherDecision:'подтверждается',fatherDecision:'не определено'});m.finish(gs);
 assert.equal(m.baseStatus(gs),'ready');
 console.log('Mixed-assay scenarios passed: one sample/number, IFA information, quantitative control, contact inheritance, free-text symptoms, SNP and origin completeness.');
+
+// Automatic ordinals are stable across deletion, page boundaries and registration.
+m.db.role='manager';const auto=m.request('auto-ordinal','pcr','Учебная авто-нумерация',0,'draft');auto.autoNumbered=true;auto.commonTests=[m.types.pcr.code];auto.commonMaterial='кровь';auto.commonSpecies='КРС';
+for(let i=0;i<51;i++)auto.samples.push(m.newDraftSample(auto));
+assert.equal(auto.samples[0].label,'1');assert.equal(auto.samples[50].label,'51');
+auto.samples.splice(49,1);auto.samples.pop();auto.samples.push(m.newDraftSample(auto));assert.equal(auto.samples.at(-1).ordinal,52);
+const autoSaved=m.saveDraft(auto,true);assert.equal(autoSaved.samples.at(-1).label,'52');m.db.role='lab';autoSaved.samples.at(-1).state='accepted';m.register(autoSaved);assert.equal(autoSaved.samples.at(-1).label,'52');assert.ok(autoSaved.samples.at(-1).number.endsWith('и'));
+
+// All seven kinds can be selected in one entry form; routing and numbering remain automatic.
+m.db.role='manager';const all=m.request('all-kinds','pcr','Учебный полный набор',0,'draft');Object.assign(all,{autoNumbered:true,commonTests:[m.types.pcr.code],commonMaterial:'кровь',commonSpecies:'КРС',vaccineState:'unknown'});all.samples.push(m.newDraftSample(all));
+m.setDraftTypes(all,Object.keys(m.types));assert.equal(all.selectedTypes.length,7);assert.equal(all.samples.length,2);assert.equal(all.samples[1].species,'продукция / объект');
+assert.throws(()=>m.saveDraft(all,true),/номер животного/);all.samples[0].animalId='BY000000001001';all.samples[1].objectName='Учебное молоко';
+const combinedDraft=m.saveDraft(all,false);assert.equal(m.requestTypes(combinedDraft).length,7);assert.equal(combinedDraft.relatedRequestIds,undefined);
+const firstPart=m.saveDraft(combinedDraft,true),family=m.db.requests.filter(r=>r.familyId==='all-kinds');assert.equal(family.length,3);assert.equal(firstPart.relatedRequestIds.length,2);
+const infPart=family.find(r=>r.dir==='inf'),genPart=family.find(r=>r.dir==='gen'&&r.type!=='product'),productPart=family.find(r=>r.type==='product');
+assert.equal(infPart.samples[0].label,'1');assert.equal(genPart.samples[0].label,'BY000000001001');assert.equal(productPart.samples[0].label,'Учебное молоко');assert.equal(infPart.samples[0].sourceSampleId,genPart.samples[0].sourceSampleId);
+assert.equal(m.requestTypes(infPart).length,3);assert.equal(m.requestTypes(genPart).length,3);assert.equal(m.requestTypes(productPart).length,1);
+m.db.role='lab';for(const part of family){part.samples.forEach(s=>s.state='accepted');m.register(part)}
+assert.ok(infPart.number.startsWith('И'));assert.ok(genPart.number.startsWith('Г'));assert.equal(genPart.samples[0].number,known.number);assert.notEqual(productPart.samples[0].number,genPart.samples[0].number);
+assert.throws(()=>m.saveDraft(combinedDraft,true),/защищена/);
+console.log('Unified selection scenarios passed: seven visible kinds, automatic routing, stable ordinals, preserved genetic identity and separate official numbering.');
