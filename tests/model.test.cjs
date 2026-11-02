@@ -69,3 +69,25 @@ m.db.role='lab';for(const part of family){part.samples.forEach(s=>s.state='accep
 assert.ok(infPart.number.startsWith('И'));assert.ok(genPart.number.startsWith('Г'));assert.equal(genPart.samples[0].number,known.number);assert.notEqual(productPart.samples[0].number,genPart.samples[0].number);
 assert.throws(()=>m.saveDraft(combinedDraft,true),/защищена/);
 console.log('Unified selection scenarios passed: seven visible kinds, automatic routing, stable ordinals, preserved genetic identity and separate official numbering.');
+
+// A mixed application reports every blocking field, including an error beyond page one.
+m.db.role='manager';const invalid=m.request('validation','ifa','',51,'draft');
+Object.assign(invalid,{autoNumbered:true,selectedTypes:['ifa','genetic'],vaccineState:''});
+for(const [i,s] of invalid.samples.entries()){s.ordinal=i+1;s.label=String(i+1);s.tests=['3.1.4','GEN'];s.animalId='BY'+String(9000+i).padStart(12,'0')}
+invalid.samples[50].animalId='BY123';invalid.samples[1].material='';
+const beforeValidation=JSON.stringify(invalid),beforeCount=m.db.requests.length;
+const errors=m.draftIssues(invalid,true);
+assert.deepEqual(Array.from(errors,x=>x.field),['customer','vaccineState','material','animalId']);
+const lastIdError=errors.find(x=>x.field==='animalId');assert.equal(lastIdError.index,50);assert.equal(lastIdError.ordinal,51);assert.equal(lastIdError.sampleId,invalid.samples[50].id);
+assert.equal(JSON.stringify(invalid),beforeValidation);assert.throws(()=>m.saveDraft(invalid,true),/заказчика/);assert.equal(m.db.requests.length,beforeCount);
+invalid.customer='Учебная проверка обязательных полей';invalid.samples[1].material='кровь';invalid.samples[50].animalId='BY000000009999';
+assert.deepEqual(Array.from(m.draftIssues(invalid,true),x=>x.field),['vaccineState']);
+assert.equal(m.draftIssues(invalid,false).length,0);assert.equal(m.saveDraft(invalid,false).status,'draft');
+invalid.vaccineState='unknown';assert.equal(m.draftIssues(invalid,true).length,0);assert.equal(m.saveDraft(invalid,true).status,'sent');
+
+// Missing assignments, missing samples and the empty kind selection are actionable too.
+const noAssignments=m.request('no-assignments','pcr','Учебная заявка',1,'draft');noAssignments.samples[0].tests=[];
+assert.ok(m.draftIssues(noAssignments).some(x=>x.field==='tests'&&x.sampleId===noAssignments.samples[0].id));
+noAssignments.samples=[];noAssignments.selectedTypes=[];
+assert.deepEqual(Array.from(m.draftIssues(noAssignments),x=>x.field),['types','sampleList']);
+console.log('Draft validation scenarios passed: complete error list, no mutation on failure, precise sample location, conditional IFA requirement and incomplete-vaccination draft saving.');

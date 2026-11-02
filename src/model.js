@@ -72,16 +72,26 @@ function replace(r,s,reason){if(!['head','lab'].includes(db.role)||!s.number)thr
 function snapshot(r){const accepted=r.samples.filter(s=>s.state==='accepted'&&s.work==='done');if(!accepted.length)throw Error('Пока нет завершённых результатов');return {...clone(r),samples:clone(accepted),docs:[],audit:[],phone:'',contact:''};}
 function prepare(r){if(!['head','lab'].includes(db.role))throw Error('Подготовка доступна приёмке');const snap=snapshot(r);const doc={id:uid('d'),number:r.number+(r.dir==='inf'?('-'+[...new Set(requestTypes(r).map(t=>t==='ifa'?'ИФА':'ПЦР'))].join('-')):''),version:r.docs.length+1,status:'draft',created:date(),issued:'',snapshot:snap,prepared:roles[db.role].person,tester:r.lastTester||'Исполнитель испытания',approver:roles.head.person};r.docs.push(doc);audit(r,'Подготовлен документ, версия '+doc.version);return doc;}
 function approve(r,doc){if(db.role!=='head')throw Error('Утверждение доступно руководителю');if(doc.status!=='draft')throw Error('Документ уже утверждён');doc.status='approved';doc.approved=now();doc.approvedBy=roles.head.person;audit(r,'Утверждён документ '+doc.number+' · версия '+doc.version);}
+function draftIssues(d,send=true){
+ const out=[],add=(field,step,label,message,sample=null,index=-1)=>out.push({key:field+(sample?':'+sample.id:''),field,step,label,message,sampleId:sample?.id||'',index,ordinal:sample?.ordinal||index+1});
+ if(d.selectedTypes?d.selectedTypes.length===0:!d.samples.some(s=>s.tests.length))add('types',1,'Виды испытаний','Выберите хотя бы один вид испытаний');
+ if(!d.customer?.trim())add('customer',1,'Заказчик','Укажите заказчика');
+ if(send&&requestTypes(d).includes('ifa')&&!d.vaccineState)add('vaccineState',1,'Сведения о вакцинации','Укажите, предоставлены ли сведения о вакцинации');
+ if(!d.samples.length)add('sampleList',2,'Пробы','Добавьте хотя бы одну пробу');
+ for(const [i,s] of d.samples.entries()){
+  const kinds=sampleTypes(d,s),animal=kinds.some(t=>types[t].dir==='gen'&&t!=='product');
+  if(!s.material?.trim())add('material',2,'Материал','Выберите материал пробы',s,i);
+  if(!s.tests.length)add('tests',2,'Исследования','Выберите хотя бы одно исследование для пробы',s,i);
+  if(!d.autoNumbered&&!s.label?.trim()&&!animal)add('label',2,'Обозначение','Укажите обозначение пробы',s,i);
+  if(kinds.includes('product')&&kinds.length>1)add('tests',2,'Исследования','Для испытаний продукции добавьте отдельную пробу',s,i);
+  if(animal){const label=d.autoNumbered?s.animalId:s.label;if(!label?.trim())add('animalId',2,'Индивидуальный номер животного','Укажите индивидуальный номер животного для генетических испытаний',s,i);else if(label.startsWith('BY')&&!/^BY\d{12}$/.test(label))add('animalId',2,'Индивидуальный номер животного','Для белорусских животных нужен BY и 12 цифр',s,i);if(s.sourceKind==='pool')add('pool',2,'Источники пробы','Для генетики нужна отдельная проба каждого животного',s,i)}
+ }
+ return out;
+}
 function saveDraft(d,send){
  if(!['manager','lab','head'].includes(db.role))throw Error('Создание заявки недоступно');
  const prev=find(d.id);if(prev&&prev.status!=='draft')throw Error('Отправленная заявка защищена от изменения');
- const draft=clone(d);numberSamples(draft);if(draft.selectedTypes&&draft.selectedTypes.length===0)throw Error('Выберите хотя бы один вид испытаний');if(!draft.customer.trim())throw Error('Выберите заказчика');if(!draft.samples.length)throw Error('Добавьте хотя бы одну пробу');
- for(const s of draft.samples){if(!s.material||!s.tests.length||(!draft.autoNumbered&&!s.label.trim()))throw Error(draft.autoNumbered?'Проверьте материал и исследования каждой пробы':'Проверьте обозначение, материал и исследования каждой пробы');
-  const kinds=sampleTypes(draft,s),animal=kinds.some(t=>types[t].dir==='gen'&&t!=='product');
-  if(kinds.includes('product')&&kinds.length>1)throw Error('Для испытаний продукции добавьте отдельную пробу');
-  if(animal){const label=draft.autoNumbered?s.animalId:s.label;if(!label?.trim())throw Error('Укажите индивидуальный номер животного для генетических испытаний');if(label.startsWith('BY')&&!/^BY\d{12}$/.test(label))throw Error('Для белорусских животных нужен BY и 12 цифр');if(s.sourceKind==='pool')throw Error('Для генетики нужна отдельная проба каждого животного')}
- }
- if(send&&requestTypes(draft).includes('ifa')&&!draft.vaccineState)throw Error('Укажите, предоставлены ли сведения о вакцинации');
+ const draft=clone(d);numberSamples(draft);const issues=draftIssues(draft,send);if(issues.length)throw Error(issues[0].message);
  delete draft.purpose;if(draft.contactSameAsCollector)draft.contact=draft.collector;
  const groups=[...new Set(requestTypes(draft).map(registrationGroup))],parts=send?groups:[null],ids=parts.map((_,i)=>i===0?draft.id:uid('r'));
  const saved=parts.map((group,i)=>{const r=clone(draft);r.id=ids[i];r.samples=draft.samples.map(s=>({...clone(s),tests:s.tests.filter(code=>group===null||registrationGroup(testType(db,draft,code))===group)})).filter(s=>s.tests.length);
@@ -92,5 +102,5 @@ function saveDraft(d,send){
  for(const r of saved)audit(r,send?'Заявка отправлена на приёмку':'Черновик сохранён');return saved[0];
 }
 function reset(){db=initial();save()}
-window.LabModel={get db(){return db},roles,types,materials,animals,regions,markers,pigMarkers,uid,date,now,clone,sample,request,save,audit,find,targets,targetName,testType,sampleTypes,requestTypes,targetsForType,setDraftTypes,numberSamples,newDraftSample,registrationGroup,baseStatus,roleCan,register,transmit,receive,finish,consent,replace,prepare,approve,saveDraft,reset,KEY};save();
+window.LabModel={get db(){return db},roles,types,materials,animals,regions,markers,pigMarkers,uid,date,now,clone,sample,request,save,audit,find,targets,targetName,testType,sampleTypes,requestTypes,targetsForType,setDraftTypes,numberSamples,newDraftSample,registrationGroup,draftIssues,baseStatus,roleCan,register,transmit,receive,finish,consent,replace,prepare,approve,saveDraft,reset,KEY};save();
 })();
